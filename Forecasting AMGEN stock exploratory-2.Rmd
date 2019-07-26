@@ -1,0 +1,317 @@
+---
+title: "Forecasting AMGEN stock price"
+author: "Daniela"
+date: "March 6, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+Getting Data from Yahoo! Finance with quantmod
+We use the quantmod function getSymbols, to get AMGEN stock data using its ticker symbol is AMGN and pass a string as a first argument to identify the desired ticker symbol, pass 'yahoo' to src for Yahoo! Finance, and from and to specify date ranges. GetSymbols loads the data directly into the global environment, with the object being named after the loaded ticker symbol.
+
+```{r cars}
+# Get quantmod
+if (!require("quantmod")) {
+    install.packages("quantmod")
+    library(quantmod)
+}
+
+start <- as.Date("2009-01-01")
+end <- as.Date("2019-03-06")
+
+
+getSymbols("AMGN", src = "yahoo", from = start, to = end)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# Let's see the first few rows of the data
+head(AMGN)
+```
+xts objects is an improved version of the ts object for storing time series data. It allows for time based indexing and provides custom attributes. Open is the price of the stock at the beginning of the trading day, it might not be the closing price of the previous trading day, high is the highest price of the stock on that trading day, low is the lowest price of the stock on the trading day, and close is the price of the stock at closing time. Volume indicates how many stocks were tradedand adjusted close is the closing price of the stock that adjusts the price of the stock for corporate actions. 
+
+Visualizing Stock Data
+We would like to visualize the stock data using plot in R to visualize the series.
+```{r}
+write.csv(AMGN, "AMGNO.csv")
+plot(AMGN[, "AMGN.Close"], main = "AMGN")
+```
+The linechart shows the plot of the stock price over time. To view the other variables  (open, high, low, and close) with the date we will use Japanese candlestick plot. Financial data is often plotted with a Japanese candlestick plot, using the function candleChart() from quantmod to create such a chart.
+```{r}
+candleChart(AMGN, up.col = "black", dn.col = "red", theme = "white")
+```
+
+```{r}
+candleChart(AMGN, up.col = "black", dn.col = "red", theme = "white", subset = "2018-01-04/")
+
+AMGN_sma_20 <- SMA(
+  Cl(AMGN),  # The closing price of AMGN, obtained by quantmod's Cl() function
+  n = 20     # The number of days in the moving average window
+  )
+
+AMGN_sma_50 <- SMA(
+  Cl(AMGN),
+  n = 50
+  )
+
+AMGN_sma_200 <- SMA(
+  Cl(AMGN),
+  n = 200
+  )
+
+zoomChart("2018")  # Zoom into the year 2018 in the chart
+addTA(AMGN_sma_20, on = 1, col = "red")  # on = 1 plots the SMA with price
+addTA(AMGN_sma_50, on = 1, col = "blue")
+addTA(AMGN_sma_200, on = 1, col = "green")
+```
+If the fast moving average is above the slow moving average, it follows the bulls rule, and if thefast moving average is below the slow moving average call it the bears rule.
+```{r}
+library(quantstrat)
+AMGN_trade <- AMGN
+AMGN_trade$`20d` <- AMGN_sma_20
+AMGN_trade$`50d` <- AMGN_sma_50
+```
+
+```{r}
+#install.packages("devtools") # if not installed
+#install.packages("FinancialInstrument") #if not installed
+#install.packages("PerformanceAnalytics") #if not installed
+
+# next install blotter from GitHub
+#devtools::install_github("braverock/blotter")
+# next install quantstrat from GitHub
+#devtools::install_github("braverock/quantstrat")
+```
+```{r}
+library(quantstrat)
+regime_val <- sigComparison("", data = AMGN_trade,
+                            columns = c("20d", "50d"), relationship = "gt") -
+              sigComparison("", data = AMGN_trade,
+                            columns = c("20d", "50d"), relationship = "lt")
+
+plot(regime_val["2016"], main = "Regime", ylim = c(-2, 2))
+```
+
+```{r}
+plot(regime_val, main = "Regime", ylim = c(-2, 2))
+```
+visualize the regime along with the main series with the following code:
+```{r}
+candleChart(AMGN, up.col = "black", dn.col = "red", theme = "white", subset = "2016-01-04/")
+addTA(regime_val, col = "blue", yrange = c(-2, 2))
+addLines(h = 0, col = "black", on = 3)
+addSMA(n = c(20, 50), on = 1, col = c("red", "blue"))
+zoomChart("2019")
+```
+```{r}
+candleChart(AMGN, up.col = "black", dn.col = "red", theme = "white", subset = "2016-01-04/")
+addTA(regime_val, col = "blue", yrange = c(-2, 2))
+addLines(h = 0, col = "black", on = 3)
+addSMA(n = c(20, 50), on = 1, col = c("red", "blue"))
+```
+The call below indicates that the market was bullish on AMGN stock for 1506 days, and bearish for 1004 days. Trading signals appear at regime changes. When a bullish regime begins, a buy signal is triggered, and when it ends, a sell signal is triggered. Likewise, when a bearish regime begins, a sell signal is triggered, and when the regime ends, a buy signal is triggered (this is of interest only if you ever will short the stock, or use some derivative like a stock option to bet against the market).
+```{r}
+sig <- diff(regime_val) / 2
+plot(sig, main = "Signal", ylim = c(-2, 2))
+table(sig)
+
+```
+
+```{r}
+table(as.vector(regime_val))
+```
+Let's now try to identify what the prices of the stock is at every buy and every sell.
+```{r}
+# The Cl function from quantmod pulls the closing price from the object
+# holding a stock's data
+# Buy prices
+Cl(AMGN)[which(sig == 1)]
+```
+
+```{r}
+# Sell prices
+Cl(AMGN)[sig == -1]
+```
+```{r}
+# Since these are of the same dimension, computing profit is easy
+as.vector(Cl(AMGN)[sig == 1])[-1] - Cl(AMGN)[sig == -1][-table(sig)[["1"]]]
+```
+Above, we can see that on September 29th, 2016, there was a drop in the price of AMGN stock, and it looks like our trading system would do badly. 
+
+```{r}
+candleChart(AMGN, up.col = "black", dn.col = "red", theme = "white")
+addTA(regime_val, col = "blue", yrange = c(-2, 2))
+addLines(h = 0, col = "black", on = 3)
+addSMA(n = c(20, 50), on = 1, col = c("red", "blue"))
+zoomChart("2018-08/2019-03")
+```
+Let's go back, adjust the AMGN data, and reevaluate our trading system using the adjusted data.
+```{r}
+candleChart(adjustOHLC(AMGN), up.col = "black", dn.col = "red", theme = "white")
+addLines(h = 0, col = "black", on = 3)
+addSMA(n = c(20, 50), on = 1, col = c("red", "blue"))
+```
+Prediction of Stock Prices
+```{r}
+## Required Packages
+library(Quandl)
+library(tidyverse)
+library(tidyquant)
+library(timetk)
+library(forecast)
+library(gridExtra)
+library(tseries)
+library(timeSeries)
+library(xts)
+```
+
+```{r}
+## Regression models
+m1=lm(AMGN$AMGN.Close~AMGN$AMGN.Low + AMGN$AMGN.High +AMGN$AMGN.Open+AMGN$AMGN.Adjusted)
+ 
+p1.df=as.data.frame(predict(m1,interval="predict"))
+
+## Forecast using ARIMA to take out the seasonality and cyclic part of the stock
+m2=arima(diff(AMGN$AMGN.Close),order=c(1,0,0))
+p2.df=as.data.frame(predict(m2,n.ahead=3))
+
+## Combining the Random and Stock  together
+
+p1.df=p1.df[1:3,]
+p1.df$fit=p1.df$fit+p2.df$pred
+
+## Create the date df for three dates
+date<-as.data.frame(as.Date(c("2019-03-12","2019-03-15","2019-12-31")))
+colnames(date)=c("date")
+
+## Modify the predict dataset and add "key" variable for AMGN
+
+p1.df<-cbind(p1.df,date)
+p1.df["Key"]<-"Predicted"
+p1.df<-p1.df[,c("date","fit","lwr","upr","Key")]
+
+## Rename the columns
+colnames(p1.df)<-c("Date","Close","lwr","upr","Key")
+
+
+```
+We will be evaluating the adjusted closing price, and we will convert the data to monthly data for better visuals.
+
+```{r}
+stock.data.monthly <- to.monthly(AMGN)
+adj <- Ad(stock.data.monthly)
+```
+The frequency parameter in ts() is the number of observations per unit of time. In this case, we use monthly data over a number of years, and want to detect seasons within a year, so we set the frequency to 12.
+```{r}
+freq <- 12
+adj.ts <- ts(adj, frequency = freq)
+```
+We want to create a training set and a testing set. The testing set will be used to test our forecast on data that the model did not see yet.
+
+The timeSeries object is structured in such a way where the periods are the rows and the months are the columns. It would help us segment if we know how many periods there are and how many data points are in the partial period. Given that we know the frequency and the desired test size (3 months), we can calculate that information which will later be used to setup the test and training sets.
+
+```{r}
+whole.periods <- floor(nrow(adj.ts) / freq)
+partial.periods <- nrow(adj.ts) %% freq
+```
+
+With the timeseries we just created, the rows of the timeSeries object represent periods. We have to segment the timeSeries object with window and set the start and end parameters to row column vectors. Segmenting with window preserves the time series' properties.
+```{r}
+desired.test <- 3
+training.end.row <- whole.periods + 1
+training.end.col <- ifelse(partial.periods == 0, freq - desired.test, freq - partial.periods - desired.test)
+if(partial.periods < desired.test){
+  training.end.row <- whole.periods
+  training.end.col <- freq - (desired.test - partial.periods)
+}
+training.ts <- window(adj.ts, start=1,end=9)##time point 1 and end in time point 5(1st year~5th year)
+testing.ts <- window(adj.ts, start=10,end=11)
+```
+Fit the Model
+We will fit the model with STL. STL removes the seasonal component and leaves the randomness and trend. We will forecast with STL and arima with and without extra information, such as month.
+```{r}
+fit.stl <- stl(training.ts[,1], s.window = "period")
+#Plot the decomposition.
+plot(fit.stl, main="STL Decomposition")
+
+```
+The spikes in the remainder are from the unusual spikes in the prices.
+
+Forecast without month data
+In this example, we will forecast the last 3 months to check the accuracy of the forecast.
+```{r}
+forecasted.adj <- stlf(training.ts[,1], s.window = "period", method="arima", h=desired.test)
+plot(forecasted.adj, main="Forecasts of NWN from STL and ARIMA (w/o month data)")
+```
+Evaluate the results
+The residuals should be uncorrelated, else there is information left in the data that should be accounted for. Also the mean of the residuals should be zero, else the forecast is biased.
+
+Check the accuracy
+```{r}
+# Plot the residuals
+res <- residuals(forecasted.adj)
+plot(res, main="Residuals W/O Month Data and no Tuning")
+```
+```{r}
+# Check the correlation of the residuals
+Acf(res, main="Autocorrelation W/O Month Data and no Tuning")
+```
+Forecast with additional month data
+```{r}
+dates <- index(adj)
+months <- format(dates, "%b")
+
+xreg.months <- model.matrix(~as.factor(months))[, 2:12]
+colnames(xreg.months) <- gsub("as\\.factor\\(months\\)", "", colnames(xreg.months))
+```
+
+```{r}
+##Setup the test and train datasets for the extra information
+
+training.xtra <- xreg.months[1:nrow(training.ts),]
+testing.xtra <- xreg.months[nrow(training.ts) + 1:nrow(testing.ts),]
+#Forecast with the additional data without some of the tuning parameters. The biasadj and robust parameters were not effective.
+
+forecasted.adj <- stlf(training.ts[,1], s.window = "period", method="arima", h=nrow(testing.xtra), xreg = training.xtra, newxreg = testing.xtra, lambda = 1.5)
+plot(forecasted.adj, main="Forecasts of NWN from STL and ARIMA (with month data)")
+```
+
+MODEL 3
+Compute the logarithmic returns of the stock as we want the ARIMA model to forecast the log returns and not the stock price. We also plot the log return series using the plot function.
+```{r}
+# Select the relevant close price series
+stock_prices = AMGN[,4]
+# Compute the log returns for the stock
+stock = diff(log(stock_prices),lag=1)
+stock = stock[!is.na(stock)]
+
+# Plot log returns 
+plot(stock,type='l', main='log returns plot')
+
+```
+```{r}
+# Conduct ADF test on log returns series
+print(adf.test(stock))
+```
+The ADF test on the returns series data is used to check for stationarity. The p-value of 0.01 tells us that the series is stationary. If the series were to be non-stationary, we would have first differenced the returns series to make it stationary.
+```{r}
+#we fixed a breakpoint which will be used to split the returns dataset in two parts further down the code.
+
+# Split the dataset in two parts - training and testing
+breakpoint = floor(nrow(stock)*(2.9/3))
+#We truncate the original returns series till the breakpoint, and call the ACF and PACF functions on this truncated series.
+# Apply the ACF and PACF functions
+par(mfrow = c(1,1))
+acf.stock = acf(stock[c(1:breakpoint),], main='ACF Plot', lag.max=100)
+pacf.stock = pacf(stock[c(1:breakpoint),], main='PACF Plot', lag.max=100)
+```
+We can observe these plots and arrive at the Autoregressive (AR) order and Moving Average (MA) order.
+
+We know that for AR models, the ACF will dampen exponentially and the PACF plot will be used to identify the order (p) of the AR model. For MA models, the PACF will dampen exponentially and the ACF plot will be used to identify the order (q) of the MA model. From these plots let us select AR order = 2 and MA order = 2. Thus, our ARIMA parameters will be (2,0,2).
